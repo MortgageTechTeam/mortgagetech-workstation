@@ -157,8 +157,23 @@ Invoke-Step 'GitHub CLI authentication' {
         Write-Log 'Already authenticated to github.com'
         return
     }
-    Write-Log 'Launching gh auth login (web browser flow)...'
+    Write-Log ''
+    Write-Log '====================================================================='
+    Write-Log ' GitHub authentication required.'
+    Write-Log ' A browser window will open. Sign in with your MortgageTechTeam account.'
+    Write-Log ' DO NOT CLOSE THIS WINDOW until the browser shows "Congratulations".'
+    Write-Log '====================================================================='
+    Write-Log ''
     & gh auth login --hostname github.com --git-protocol https --web
+    if ($LASTEXITCODE -ne 0) {
+        throw "gh auth login failed (exit $LASTEXITCODE). Run 'gh auth login' manually then re-run the bootstrap."
+    }
+    # Re-verify after login completes
+    $status2 = & gh auth status 2>&1 | Out-String
+    if ($status2 -notmatch 'Logged in to github.com') {
+        throw "gh auth status still reports not logged in after login flow. Run 'gh auth login' manually then re-run the bootstrap."
+    }
+    Write-Log 'GitHub authentication confirmed.'
 }
 
 # --- CLONE REPOS ------------------------------------------------------------
@@ -168,9 +183,16 @@ foreach ($repo in $Repos) {
         if (Test-Path (Join-Path $target '.git')) {
             Write-Log "$repo already cloned, pulling latest"
             Push-Location $target
-            try { git pull --ff-only 2>&1 | Out-Null } finally { Pop-Location }
+            try {
+                & git pull --ff-only
+                if ($LASTEXITCODE -ne 0) { throw "git pull exit $LASTEXITCODE" }
+            } finally { Pop-Location }
         } else {
-            git clone "https://github.com/$GitHubOrg/$repo.git" $target 2>&1 | Out-Null
+            # Use 'gh repo clone' so the cloned repo inherits gh auth token (avoids credential prompts)
+            & gh repo clone "$GitHubOrg/$repo" $target
+            if ($LASTEXITCODE -ne 0) {
+                throw "gh repo clone exit $LASTEXITCODE — verify you have access to $GitHubOrg/$repo"
+            }
         }
     }
 }
