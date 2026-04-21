@@ -102,7 +102,13 @@ foreach ($pkg in $packages) {
             Write-Log "$($pkg.Name) already installed"
             return
         }
-        winget install --id $pkg.Id --exact --silent --accept-package-agreements --accept-source-agreements --source winget 2>&1 | Out-Null
+        Write-Log "Downloading and installing $($pkg.Name) (this can take 1-3 minutes; live winget output below)..."
+        # Show live winget output so user sees progress and any UAC/error prompts.
+        # --silent removed so installer windows surface; --disable-interactivity keeps it scriptable.
+        & winget install --id $pkg.Id --exact --accept-package-agreements --accept-source-agreements --source winget --disable-interactivity
+        if ($LASTEXITCODE -ne 0) {
+            throw "winget exit code $LASTEXITCODE installing $($pkg.Id)"
+        }
     }
 }
 
