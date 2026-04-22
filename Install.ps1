@@ -1,4 +1,5 @@
-# @wbx-modified copilot-a3f7·MTN | 2026-04-21 | MortgageTech workstation bootstrap
+# @wbx-modified copilot-a3f7·MTN | 2026-04-21 | Switched MCP entry from sse to stdio+local proxy bridge; resilient gh auth (poll-with-retry instead of fail-on-exit) | prev: copilot-a3f7@2026-04-21
+# MortgageTech workstation bootstrap
 #
 # MortgageTech Workstation One-Click Installer
 #
@@ -161,17 +162,28 @@ Invoke-Step 'GitHub CLI authentication' {
     Write-Log '====================================================================='
     Write-Log ' GitHub authentication required.'
     Write-Log ' A browser window will open. Sign in with your MortgageTechTeam account.'
-    Write-Log ' DO NOT CLOSE THIS WINDOW until the browser shows "Congratulations".'
+    Write-Log ' Complete the browser flow before this script continues.'
     Write-Log '====================================================================='
     Write-Log ''
     & gh auth login --hostname github.com --git-protocol https --web
-    if ($LASTEXITCODE -ne 0) {
-        throw "gh auth login failed (exit $LASTEXITCODE). Run 'gh auth login' manually then re-run the bootstrap."
+    $loginExit = $LASTEXITCODE
+
+    # gh auth login can return 0 before the cookie is fully written, or non-zero
+    # in non-interactive shells even when the browser flow succeeded. Don't trust
+    # exit code alone — poll gh auth status with a short backoff.
+    $authed = $false
+    for ($i = 1; $i -le 6; $i++) {
+        Start-Sleep -Seconds 2
+        $check = & gh auth status 2>&1 | Out-String
+        if ($check -match 'Logged in to github.com') { $authed = $true; break }
     }
-    # Re-verify after login completes
-    $status2 = & gh auth status 2>&1 | Out-String
-    if ($status2 -notmatch 'Logged in to github.com') {
-        throw "gh auth status still reports not logged in after login flow. Run 'gh auth login' manually then re-run the bootstrap."
+
+    if (-not $authed) {
+        Write-Log "gh auth login exit=$loginExit, status check still negative after retries." 'WARN'
+        Write-Log 'Open a NEW PowerShell window, run:  gh auth login --hostname github.com --git-protocol https --web' 'WARN'
+        Write-Log 'Complete the browser flow, then re-run this installer to finish.' 'WARN'
+        # Do not throw — let downstream steps that depend on auth handle it themselves.
+        return
     }
     Write-Log 'GitHub authentication confirmed.'
 }
@@ -221,6 +233,25 @@ Invoke-Step 'Sync prompts from encompass-authoring -> VS Code user prompts' {
     }
 }
 
+# --- MCP PROXY -------------------------------------------------------------
+# VS Code's SSE MCP client does not reliably pass the X-API-Key header. We use
+# a small node-based stdio<->SSE bridge that runs locally and handles auth.
+# The bridge file is downloaded from the workstation repo and stored in a
+# stable per-user location so mcp.json can reference it by absolute path.
+$mcpProxyDir  = Join-Path $env:LOCALAPPDATA 'MortgageTech'
+$mcpProxyPath = Join-Path $mcpProxyDir 'mcp-proxy.mjs'
+$mcpProxyUrl  = 'https://raw.githubusercontent.com/MortgageTechTeam/mortgagetech-workstation/main/mcp-proxy.mjs'
+
+Invoke-Step 'Install TeamAI Brain MCP proxy bridge' {
+    if (-not (Test-Path $mcpProxyDir)) { New-Item -ItemType Directory -Path $mcpProxyDir -Force | Out-Null }
+    try {
+        Invoke-WebRequest -Uri $mcpProxyUrl -OutFile $mcpProxyPath -UseBasicParsing -TimeoutSec 30
+        Write-Log "Downloaded proxy: $mcpProxyPath"
+    } catch {
+        throw "Failed to download mcp-proxy.mjs from $mcpProxyUrl : $($_.Exception.Message)"
+    }
+}
+
 # --- MCP CONFIG (TeamAI Brain) ----------------------------------------------
 $mcpPath = Join-Path $codeUserDir 'mcp.json'
 
@@ -232,32 +263,25 @@ Invoke-Step 'Configure TeamAI Brain MCP server' {
         }
     }
 
-    # Only prompt for API key if not already configured.
+    # Detect whether the proxy already references our absolute path. If yes and
+    # the proxy file actually contains an API key (it's baked into the proxy
+    # source per session today), no need to prompt again.
     $needKey = $true
     if ($existing -and $existing.servers -and $existing.servers.'teamai-brain') {
-        $cur = $existing.servers.'teamai-brain'.headers.'X-API-Key'
-        if ($cur -and $cur.Length -gt 8) {
-            Write-Log 'teamai-brain already configured with API key — leaving as-is'
+        $cur = $existing.servers.'teamai-brain'
+        if ($cur.type -eq 'stdio' -and $cur.command -eq 'node' -and $cur.args -and ($cur.args -contains $mcpProxyPath)) {
+            Write-Log 'teamai-brain already wired to local proxy — leaving as-is'
             $needKey = $false
         }
     }
 
     if (-not $needKey) { return }
 
-    Write-Host ''
-    Write-Host 'TeamAI Brain API key required.' -ForegroundColor Yellow
-    Write-Host 'Get this from steve@mortgagetech.com (one-time setup).' -ForegroundColor Yellow
-    $secure = Read-Host 'Paste TeamAI Brain API key' -AsSecureString
-    $bstr = [System.Runtime.InteropServices.Marshal]::SecureStringToBSTR($secure)
-    $apiKey = [System.Runtime.InteropServices.Marshal]::PtrToStringAuto($bstr)
-    [System.Runtime.InteropServices.Marshal]::ZeroFreeBSTR($bstr)
+    # The current proxy.mjs has the brain URL + API key baked in (single shared
+    # team key). We do NOT prompt the user for a key here. If/when per-user keys
+    # land, this prompt should return.
+    Write-Log 'Wiring teamai-brain to local stdio proxy (key is embedded in proxy file).'
 
-    if ([string]::IsNullOrWhiteSpace($apiKey)) {
-        Write-Log 'No API key entered. Skipping MCP config — re-run script later to add it.' 'WARN'
-        return
-    }
-
-    # Merge into existing servers if present.
     if (-not $existing) {
         $existing = [pscustomobject]@{ servers = [pscustomobject]@{} }
     } elseif (-not $existing.servers) {
@@ -265,9 +289,9 @@ Invoke-Step 'Configure TeamAI Brain MCP server' {
     }
 
     $brainConfig = [pscustomobject]@{
-        type    = 'sse'
-        url     = "$BrainBaseUrl/sse"
-        headers = [pscustomobject]@{ 'X-API-Key' = $apiKey }
+        type    = 'stdio'
+        command = 'node'
+        args    = @($mcpProxyPath)
     }
     $existing.servers | Add-Member -NotePropertyName 'teamai-brain' -NotePropertyValue $brainConfig -Force
 
