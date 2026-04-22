@@ -1,10 +1,15 @@
 #!/usr/bin/env node
-// @wbx-modified copilot-a3f7 | 2026-04-21 | Resilient: auto-reconnect SSE w/ backoff, queue + retry POSTs, never exit on transient failure | prev: copilot-a3f7@2026-04-20
+// @wbx-modified copilot-a3f7 | 2026-04-21 | Read API key from env, never embed | prev: copilot-a3f7@2026-04-21
 // mcp-proxy.mjs — stdio-to-SSE bridge for teamai-brain MCP server
 // Bridges VS Code stdio MCP client to the SSE-based server with X-API-Key auth.
 
-const SSE_URL = 'https://teamai-brain-app.redmeadow-3ceab978.eastus2.azurecontainerapps.io/sse';
-const API_KEY = 'mtw7RbjqzOYCPGQvHf9ZahOFeWm7O3sBGGh3XUNA';
+const SSE_URL = process.env.MORTGAGETECH_BRAIN_URL || 'https://teamai-brain-app.redmeadow-3ceab978.eastus2.azurecontainerapps.io/sse';
+const API_KEY = process.env.MORTGAGETECH_BRAIN_KEY;
+
+if (!API_KEY) {
+  process.stderr.write('[mcp-proxy] ERROR: MORTGAGETECH_BRAIN_KEY env var not set. Re-run the workstation installer to configure your key.\n');
+  process.exit(2);
+}
 
 const RECONNECT_MIN_MS = 1000;
 const RECONNECT_MAX_MS = 30000;

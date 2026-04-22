@@ -1,4 +1,4 @@
-# @wbx-modified copilot-a3f7·MTN | 2026-04-21 | Switched MCP entry from sse to stdio+local proxy bridge; resilient gh auth (poll-with-retry instead of fail-on-exit) | prev: copilot-a3f7@2026-04-21
+# @wbx-modified copilot-a3f7·MTN | 2026-04-21 | Key prompt restored; passed via mcp.json env block, never embedded in proxy file | prev: copilot-a3f7@2026-04-21
 # MortgageTech workstation bootstrap
 #
 # MortgageTech Workstation One-Click Installer
@@ -263,24 +263,39 @@ Invoke-Step 'Configure TeamAI Brain MCP server' {
         }
     }
 
-    # Detect whether the proxy already references our absolute path. If yes and
-    # the proxy file actually contains an API key (it's baked into the proxy
-    # source per session today), no need to prompt again.
-    $needKey = $true
-    if ($existing -and $existing.servers -and $existing.servers.'teamai-brain') {
-        $cur = $existing.servers.'teamai-brain'
-        if ($cur.type -eq 'stdio' -and $cur.command -eq 'node' -and $cur.args -and ($cur.args -contains $mcpProxyPath)) {
-            Write-Log 'teamai-brain already wired to local proxy — leaving as-is'
-            $needKey = $false
-        }
+    # The proxy reads MORTGAGETECH_BRAIN_KEY from its environment. We pass the
+    # key into the proxy via mcp.json's per-server "env" block so it never
+    # touches disk anywhere except the user-scoped mcp.json file.
+    $existingKey = $null
+    if ($existing -and $existing.servers -and $existing.servers.'teamai-brain' -and $existing.servers.'teamai-brain'.env) {
+        $existingKey = $existing.servers.'teamai-brain'.env.MORTGAGETECH_BRAIN_KEY
     }
 
-    if (-not $needKey) { return }
-
-    # The current proxy.mjs has the brain URL + API key baked in (single shared
-    # team key). We do NOT prompt the user for a key here. If/when per-user keys
-    # land, this prompt should return.
-    Write-Log 'Wiring teamai-brain to local stdio proxy (key is embedded in proxy file).'
+    if ([string]::IsNullOrWhiteSpace($existingKey)) {
+        Write-Host ''
+        Write-Host '====================================================================='
+        Write-Host ' TeamAI Brain API key required.'
+        Write-Host ' Get this from steve@mortgagetech.com (sent separately, out-of-band).'
+        Write-Host ' Input is hidden as you paste.'
+        Write-Host '====================================================================='
+        $secure = Read-Host 'Paste TeamAI Brain API key' -AsSecureString
+        $bstr = [System.Runtime.InteropServices.Marshal]::SecureStringToBSTR($secure)
+        try {
+            $apiKey = [System.Runtime.InteropServices.Marshal]::PtrToStringAuto($bstr)
+        } finally {
+            [System.Runtime.InteropServices.Marshal]::ZeroFreeBSTR($bstr)
+        }
+        if ([string]::IsNullOrWhiteSpace($apiKey)) {
+            Write-Log 'No API key entered. Skipping MCP config — re-run installer to add it.' 'WARN'
+            return
+        }
+        if ($apiKey.Length -lt 16) {
+            Write-Log "API key looks short ($($apiKey.Length) chars); continuing anyway." 'WARN'
+        }
+    } else {
+        Write-Log 'teamai-brain key already present in mcp.json — leaving as-is'
+        $apiKey = $existingKey
+    }
 
     if (-not $existing) {
         $existing = [pscustomobject]@{ servers = [pscustomobject]@{} }
@@ -292,6 +307,9 @@ Invoke-Step 'Configure TeamAI Brain MCP server' {
         type    = 'stdio'
         command = 'node'
         args    = @($mcpProxyPath)
+        env     = [pscustomobject]@{
+            MORTGAGETECH_BRAIN_KEY = $apiKey
+        }
     }
     $existing.servers | Add-Member -NotePropertyName 'teamai-brain' -NotePropertyValue $brainConfig -Force
 
