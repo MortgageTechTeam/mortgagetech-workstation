@@ -1,3 +1,4 @@
+# @wbx-modified copilot-b4e7 | 2026-04-22 | Guardrail C: auto-register .githooks (brandstamp enforcement) on every cloned repo that ships them | prev: copilot-b4e7@2026-04-22
 # @wbx-modified copilot-b4e7 | 2026-04-22 | mcp.json key teamai-brain->copilot-memory + auto-migration; settings.json patch for chat.virtualTools.threshold=1000 | prev: copilot-a3f7@2026-04-21
 # @wbx-modified copilot-a3f7·MTN | 2026-04-21 | Key prompt restored; passed via mcp.json env block, never embedded in proxy file | prev: copilot-a3f7@2026-04-21
 # MortgageTech workstation bootstrap
@@ -206,6 +207,15 @@ foreach ($repo in $Repos) {
             if ($LASTEXITCODE -ne 0) {
                 throw "gh repo clone exit $LASTEXITCODE — verify you have access to $GitHubOrg/$repo"
             }
+        }
+        # Guardrail C — register .githooks if the repo ships them (brandstamp enforcement)
+        $hooksDir = Join-Path $target '.githooks'
+        if (Test-Path $hooksDir) {
+            Push-Location $target
+            try {
+                & git config core.hooksPath .githooks
+                Write-Log "$repo: registered .githooks for pre-commit brandstamp enforcement"
+            } finally { Pop-Location }
         }
     }
 }
