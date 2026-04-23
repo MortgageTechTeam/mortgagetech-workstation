@@ -276,22 +276,31 @@ Invoke-Step 'Patch VS Code settings: raise virtualTools threshold' {
 
     $changed = $false
     foreach ($k in @('github.copilot.chat.virtualTools.threshold', 'chat.tools.virtualTools.threshold')) {
-        $current = $obj.$k
-        if ($null -eq $current -or [int]$current -lt 2048) {
-            if ($obj.PSObject.Properties.Name -contains $k) {
-                $obj.$k = 2048
-            } else {
-                $obj | Add-Member -NotePropertyName $k -NotePropertyValue 2048 -Force
-            }
+        # Remove bogus keys (schema-only or non-existent — runtime ignores them)
+        if ($obj.PSObject.Properties.Name -contains $k) {
+            $obj.PSObject.Properties.Remove($k)
             $changed = $true
         }
+    }
+    # The ACTUAL runtime key Copilot Chat reads is 'chat.virtualTools.threshold'
+    # (no github.copilot prefix). Default is 128 — too low when MCP servers add
+    # 200+ tools, causing brain tools to be virtualized behind activator stubs.
+    $realKey = 'chat.virtualTools.threshold'
+    $current = $obj.$realKey
+    if ($null -eq $current -or [int]$current -lt 1000) {
+        if ($obj.PSObject.Properties.Name -contains $realKey) {
+            $obj.$realKey = 1000
+        } else {
+            $obj | Add-Member -NotePropertyName $realKey -NotePropertyValue 1000 -Force
+        }
+        $changed = $true
     }
 
     if ($changed) {
         $obj | ConvertTo-Json -Depth 20 | Set-Content -Path $settingsPath -Encoding UTF8
-        Write-Log "Set virtualTools.threshold = 2048 in $settingsPath"
+        Write-Log "Set chat.virtualTools.threshold = 1000 in $settingsPath"
     } else {
-        Write-Log 'virtualTools.threshold already >= 2048, no change'
+        Write-Log 'chat.virtualTools.threshold already >= 1000, no change'
     }
 }
 
