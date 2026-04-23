@@ -267,8 +267,13 @@ Invoke-Step 'Configure TeamAI Brain MCP server' {
     # key into the proxy via mcp.json's per-server "env" block so it never
     # touches disk anywhere except the user-scoped mcp.json file.
     $existingKey = $null
-    if ($existing -and $existing.servers -and $existing.servers.'teamai-brain' -and $existing.servers.'teamai-brain'.env) {
+    if ($existing -and $existing.servers -and $existing.servers.'copilot-memory' -and $existing.servers.'copilot-memory'.env) {
+        $existingKey = $existing.servers.'copilot-memory'.env.MORTGAGETECH_BRAIN_KEY
+    } elseif ($existing -and $existing.servers -and $existing.servers.'teamai-brain' -and $existing.servers.'teamai-brain'.env) {
+        # Migrate from old key name
         $existingKey = $existing.servers.'teamai-brain'.env.MORTGAGETECH_BRAIN_KEY
+        $existing.servers.PSObject.Properties.Remove('teamai-brain')
+        Write-Log 'Migrated mcp.json key from teamai-brain -> copilot-memory'
     }
 
     if ([string]::IsNullOrWhiteSpace($existingKey)) {
@@ -293,7 +298,7 @@ Invoke-Step 'Configure TeamAI Brain MCP server' {
             Write-Log "API key looks short ($($apiKey.Length) chars); continuing anyway." 'WARN'
         }
     } else {
-        Write-Log 'teamai-brain key already present in mcp.json — leaving as-is'
+        Write-Log 'copilot-memory key already present in mcp.json — leaving as-is'
         $apiKey = $existingKey
     }
 
@@ -311,7 +316,7 @@ Invoke-Step 'Configure TeamAI Brain MCP server' {
             MORTGAGETECH_BRAIN_KEY = $apiKey
         }
     }
-    $existing.servers | Add-Member -NotePropertyName 'teamai-brain' -NotePropertyValue $brainConfig -Force
+    $existing.servers | Add-Member -NotePropertyName 'copilot-memory' -NotePropertyValue $brainConfig -Force
 
     $existing | ConvertTo-Json -Depth 10 | Set-Content -Path $mcpPath -Encoding UTF8
     Write-Log "Wrote $mcpPath"
