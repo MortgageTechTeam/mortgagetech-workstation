@@ -252,6 +252,49 @@ Invoke-Step 'Install TeamAI Brain MCP proxy bridge' {
     }
 }
 
+# --- VS CODE SETTINGS PATCH -------------------------------------------------
+# Bump virtualTools threshold so MCP tools (especially the brain) are NOT
+# auto-grouped behind activator stubs. With many MCP servers installed, the
+# default threshold (128) causes Copilot Chat to disable tool groups until
+# the user "calls" an activator first — unacceptable UX for the team brain.
+Invoke-Step 'Patch VS Code settings: raise virtualTools threshold' {
+    $settingsPath = Join-Path $codeUserDir 'settings.json'
+    $obj = $null
+    if (Test-Path $settingsPath) {
+        try {
+            $raw = Get-Content $settingsPath -Raw
+            # Strip // comments before parsing (settings.json allows them)
+            $clean = ($raw -split "`n" | ForEach-Object { $_ -replace '^\s*//.*$', '' }) -join "`n"
+            $obj = $clean | ConvertFrom-Json -ErrorAction Stop
+        } catch {
+            Write-Log "Existing settings.json could not be parsed cleanly; skipping patch" 'WARN'
+            return
+        }
+    } else {
+        $obj = [pscustomobject]@{}
+    }
+
+    $changed = $false
+    foreach ($k in @('github.copilot.chat.virtualTools.threshold', 'chat.tools.virtualTools.threshold')) {
+        $current = $obj.$k
+        if ($null -eq $current -or [int]$current -lt 2048) {
+            if ($obj.PSObject.Properties.Name -contains $k) {
+                $obj.$k = 2048
+            } else {
+                $obj | Add-Member -NotePropertyName $k -NotePropertyValue 2048 -Force
+            }
+            $changed = $true
+        }
+    }
+
+    if ($changed) {
+        $obj | ConvertTo-Json -Depth 20 | Set-Content -Path $settingsPath -Encoding UTF8
+        Write-Log "Set virtualTools.threshold = 2048 in $settingsPath"
+    } else {
+        Write-Log 'virtualTools.threshold already >= 2048, no change'
+    }
+}
+
 # --- MCP CONFIG (TeamAI Brain) ----------------------------------------------
 $mcpPath = Join-Path $codeUserDir 'mcp.json'
 
