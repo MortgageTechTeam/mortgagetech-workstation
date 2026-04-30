@@ -1,0 +1,38 @@
+# @wbx-modified copilot-a3f7 | 2026-04-30 01:25 MTN | v1.0 | guard: forbid copilot-memory; teamai-brain is canonical | prev: original
+# Hard guard: this repo's MCP brain server name is `teamai-brain`. NEVER `copilot-memory`.
+# History: 2026-04-22 b4e7 renamed teamai-brain -> copilot-memory and broke things for hours.
+# 2026-04-30 a3f7 reverted. This workflow blocks any future regression at PR time.
+name: name-guard
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  forbid-copilot-memory:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Fail if copilot-memory appears anywhere
+        shell: bash
+        run: |
+          set -e
+          # Allow this guard file itself + any explicit allowlist line tagged GUARD-ALLOW
+          hits=$(grep -RIn --exclude-dir=.git -e 'copilot-memory' . \
+            | grep -v '.github/workflows/name-guard.yml' \
+            | grep -v 'GUARD-ALLOW' || true)
+          if [ -n "$hits" ]; then
+            echo "::error::Forbidden token 'copilot-memory' found. The MCP brain server name is 'teamai-brain'."
+            echo "$hits"
+            exit 1
+          fi
+          echo "OK: no occurrences of 'copilot-memory' (canonical name = teamai-brain)."
+      - name: Confirm teamai-brain still present in Install.ps1
+        shell: bash
+        run: |
+          if ! grep -q "teamai-brain" Install.ps1; then
+            echo "::error::Install.ps1 no longer contains 'teamai-brain'. Refusing to merge."
+            exit 1
+          fi
+          echo "OK: Install.ps1 still references teamai-brain."
